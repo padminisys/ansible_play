@@ -1,0 +1,227 @@
+---
+- name: Converge Production
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    # Production fail2ban configuration with stricter settings
+    fail2ban_loglevel: INFO
+    fail2ban_logtarget: /var/log/fail2ban.log
+    fail2ban_syslog_target: /var/log/fail2ban.log
+    fail2ban_syslog_facility: 1
+    fail2ban_socket: /var/run/fail2ban/fail2ban.sock
+    fail2ban_pidfile: /var/run/fail2ban/fail2ban.pid
+    fail2ban_dbfile: /var/lib/fail2ban/fail2ban.sqlite3
+    fail2ban_dbpurgeage: 86400
+
+    # Production jail configuration - stricter settings
+    fail2ban_default_backend: systemd
+    fail2ban_default_bantime: 7200  # 2 hours
+    fail2ban_default_findtime: 300   # 5 minutes
+    fail2ban_default_maxretry: 3     # Stricter retry limit
+    fail2ban_default_protocol: tcp
+    fail2ban_default_chain: INPUT
+    fail2ban_default_port: 0:65535
+    fail2ban_default_banaction: iptables-multiport
+    fail2ban_default_banaction_allports: iptables-allports
+    fail2ban_default_action: "%(action_)s"
+
+    # Email notification settings
+    fail2ban_destemail: security@company.com
+    fail2ban_sendername: "Fail2Ban Production"
+    fail2ban_sender: fail2ban@company.com
+    fail2ban_mta: sendmail
+
+    # Production jails configuration
+    fail2ban_jails:
+      - name: sshd
+        enabled: true
+        port: ssh
+        filter: sshd
+        logpath: /var/log/secure
+        maxretry: 3
+        bantime: 7200
+        findtime: 300
+      - name: httpd-auth
+        enabled: true
+        port: http,https
+        filter: apache-auth
+        logpath: /var/log/httpd/error_log
+        maxretry: 3
+        bantime: 3600
+      - name: httpd-badbots
+        enabled: true
+        port: http,https
+        filter: apache-badbots
+        logpath: /var/log/httpd/access_log
+        bantime: 86400
+        maxretry: 1
+  
+  pre_tasks:
+    - name: Update package cache (CentOS/RHEL)
+      ansible.builtin.dnf:
+        update_cache: true
+      when: ansible_os_family == "RedHat"
+
+    - name: Install systemd and other required packages for testing
+      ansible.builtin.dnf:
+        name:
+          - systemd
+          - systemd-sysv
+          - procps-ng
+          - iproute
+          - python3
+          - python3-pip
+          - rsyslog
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Start and enable rsyslog for log testing
+      ansible.builtin.systemd:
+        name: rsyslog
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Create secure log file if it doesn't exist
+      ansible.builtin.file:
+        path: /var/log/secure
+        state: touch
+        owner: root
+        group: root
+        mode: '0600'
+        modification_time: preserve
+        access_time: preserve
+
+    - name: Ensure systemd is running
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+  tasks:
+    # Production-specific fail2ban installation with stricter settings
+    - name: Validate OS compatibility
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == "RedHat"
+          - ansible_distribution_major_version|int >= 8
+        fail_msg: "This playbook is designed for CentOS/RHEL 8+ systems"
+        success_msg: "OS compatibility validated"
+      tags:
+        - validation
+        - fail2ban
+
+    - name: Install EPEL repository
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+      tags:
+        - packages
+        - fail2ban
+        - epel
+
+    - name: Install fail2ban package
+      ansible.builtin.dnf:
+        name: fail2ban
+        state: present
+      notify:
+        - Restart fail2ban
+      tags:
+        - packages
+        - fail2ban
+
+    - name: Create fail2ban configuration directory
+      ansible.builtin.file:
+        path: /etc/fail2ban
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags:
+        - config
+        - fail2ban
+
+    - name: Create fail2ban local configuration file
+      ansible.builtin.template:
+        src: fail2ban.local.j2
+        dest: /etc/fail2ban/fail2ban.local
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      notify:
+        - Restart fail2ban
+      tags:
+        - config
+        - fail2ban
+
+    - name: Create jail.local configuration file
+      ansible.builtin.template:
+        src: jail.local.j2
+        dest: /etc/fail2ban/jail.local
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      notify:
+        - Restart fail2ban
+      tags:
+        - config
+        - fail2ban
+
+    - name: Create fail2ban log directory
+      ansible.builtin.file:
+        path: /var/log/fail2ban
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags:
+        - config
+        - fail2ban
+
+    - name: Start and enable fail2ban service
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: started
+        enabled: true
+        daemon_reload: true
+      tags:
+        - service
+        - fail2ban
+
+  handlers:
+    - name: Restart fail2ban
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted
+        daemon_reload: true
+      tags:
+        - handlers
+        - fail2ban
+
+  post_tasks:
+    - name: Wait for fail2ban to be fully operational
+      ansible.builtin.wait_for:
+        path: /var/run/fail2ban/fail2ban.sock
+        timeout: 60
+
+    - name: Verify fail2ban service is running
+      ansible.builtin.systemd:
+        name: fail2ban
+      register: fail2ban_service_check
+      failed_when: fail2ban_service_check.status.ActiveState != "active"
+
+    - name: Test fail2ban client connectivity
+      ansible.builtin.command:
+        cmd: fail2ban-client ping
+      register: fail2ban_ping
+      changed_when: false
+      failed_when: '"pong" not in fail2ban_ping.stdout'
+
+    - name: Display production test results
+      ansible.builtin.debug:
+        msg: 
+          - "Production fail2ban service status: {{ fail2ban_service_check.status.ActiveState }}"
+          - "Production fail2ban client ping: {{ fail2ban_ping.stdout }}"
+          - "Host: {{ inventory_hostname }}"
+          - "Group: {{ group_names }}"

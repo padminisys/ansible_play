@@ -1,0 +1,27 @@
+namespace: security
+name: fail2ban
+version: 1.0.0
+readme: README.md
+authors:
+  - "Security Team <security@company.com>"
+description: Ansible collection for fail2ban installation and configuration on CentOS/RHEL systems
+license:
+  - Apache-2.0
+license_file: LICENSE
+tags:
+  - security
+  - fail2ban
+  - centos
+  - rhel
+  - intrusion_prevention
+dependencies: {}
+repository: https://github.com/company/ansible-fail2ban-collection
+documentation: https://github.com/company/ansible-fail2ban-collection
+homepage: https://github.com/company/ansible-fail2ban-collection
+issues: https://github.com/company/ansible-fail2ban-collection/issues
+build_ignore:
+  - "*.tar.gz"
+  - ".git"
+  - ".github"
+  - "tests/output"
+  - "molecule"

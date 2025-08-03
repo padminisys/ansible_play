@@ -1,0 +1,163 @@
+---
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../requirements.yml
+    force: false
+
+driver:
+  name: docker
+
+platforms:
+  - name: centos-prod-01
+    image: quay.io/centos/centos:stream10-development
+    pre_build_image: true
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    command: /usr/sbin/init
+    tmpfs:
+      - /run
+      - /tmp
+    capabilities:
+      - SYS_ADMIN
+    networks:
+      - name: molecule
+    groups:
+      - centos_servers
+      - production
+      - webservers
+
+  - name: centos-prod-02
+    image: quay.io/centos/centos:stream10-development
+    pre_build_image: true
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    command: /usr/sbin/init
+    tmpfs:
+      - /run
+      - /tmp
+    capabilities:
+      - SYS_ADMIN
+    networks:
+      - name: molecule
+    groups:
+      - centos_servers
+      - production
+      - dbservers
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      centos-prod-01:
+        fail2ban_default_bantime: 7200  # 2 hours - strict for production
+        fail2ban_default_maxretry: 3
+        fail2ban_destemail: security-prod@example.com
+        fail2ban_jails:
+          - name: sshd
+            enabled: true
+            port: ssh
+            filter: sshd
+            logpath: /var/log/secure
+            maxretry: 3
+            bantime: 7200
+            findtime: 300
+          - name: httpd-auth
+            enabled: true
+            port: http,https
+            filter: apache-auth
+            logpath: /var/log/httpd/error_log
+            maxretry: 5
+            bantime: 3600
+          - name: httpd-badbots
+            enabled: true
+            port: http,https
+            filter: apache-badbots
+            logpath: /var/log/httpd/access_log
+            bantime: 86400
+            maxretry: 1
+      centos-prod-02:
+        fail2ban_default_bantime: 14400  # 4 hours - very strict for DB servers
+        fail2ban_default_maxretry: 2
+        fail2ban_destemail: dba-security@example.com
+        fail2ban_jails:
+          - name: sshd
+            enabled: true
+            port: ssh
+            filter: sshd
+            logpath: /var/log/secure
+            maxretry: 2
+            bantime: 14400
+            findtime: 300
+    group_vars:
+      all:
+        ansible_user: root
+        ansible_python_interpreter: /usr/bin/python3
+        fail2ban_loglevel: WARNING  # Less verbose for production
+        fail2ban_ignoreip:
+          - 127.0.0.1/8
+          - ::1
+          - 172.16.0.0/12  # Docker networks
+          - 10.0.0.0/24    # Management network
+      production:
+        fail2ban_default_action: "%(action_mwl)s"  # Email with whois and logs
+        fail2ban_destemail: security-team@example.com
+        fail2ban_sendername: "Fail2Ban Production Alert"
+      webservers:
+        # Additional web server specific settings
+        fail2ban_custom_jails:
+          - name: nginx-http-auth
+            enabled: true
+            port: http,https
+            filter: nginx-http-auth
+            logpath: /var/log/nginx/error.log
+            maxretry: 5
+            bantime: 3600
+      dbservers:
+        # Database server specific settings - more restrictive
+        fail2ban_default_bantime: 14400
+        fail2ban_default_maxretry: 2
+        fail2ban_default_findtime: 300
+  config_options:
+    defaults:
+      interpreter_python: auto_silent
+      callback_whitelist: profile_tasks, timer, yaml
+      stdout_callback: yaml
+      verbosity: 1
+    ssh_connection:
+      pipelining: false
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - cleanup
+    - destroy
+  create_sequence:
+    - dependency
+    - create
+    - prepare
+  converge_sequence:
+    - dependency
+    - create
+    - prepare
+    - converge
+  destroy_sequence:
+    - dependency
+    - cleanup
+    - destroy

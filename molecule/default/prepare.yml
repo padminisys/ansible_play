@@ -1,0 +1,128 @@
+---
+- name: Prepare
+  hosts: all
+  become: true
+  gather_facts: false
+  
+  tasks:
+    - name: Install python3 for Ansible
+      ansible.builtin.raw: |
+        if command -v dnf >/dev/null 2>&1; then
+          dnf install -y python3 python3-pip
+        elif command -v yum >/dev/null 2>&1; then
+          yum install -y python3 python3-pip
+        fi
+      changed_when: false
+
+    - name: Gather facts after python installation
+      ansible.builtin.setup:
+
+    - name: Install required system packages for testing
+      ansible.builtin.dnf:
+        name:
+          - systemd
+          - systemd-sysv
+          - procps-ng
+          - iproute
+          - rsyslog
+          - iptables
+          - iptables-services
+          - which
+          - curl
+          - wget
+        state: present
+        update_cache: true
+      when: ansible_os_family == "RedHat"
+
+    - name: Start and enable systemd services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+        daemon_reload: true
+      loop:
+        - rsyslog
+      register: systemd_result
+      failed_when:
+        - systemd_result.failed
+        - "'could not be found' not in systemd_result.msg | default('')"
+
+    - name: Create required log files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: touch
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - /var/log/secure
+        - /var/log/messages
+        - /var/log/maillog
+
+    - name: Create httpd log directory (for web server jails testing)
+      ansible.builtin.file:
+        path: /var/log/httpd
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create httpd log files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - /var/log/httpd/access_log
+        - /var/log/httpd/error_log
+
+    - name: Create nginx log directory (for nginx jails testing)
+      ansible.builtin.file:
+        path: /var/log/nginx
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create nginx log files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - /var/log/nginx/access.log
+        - /var/log/nginx/error.log
+
+    - name: Ensure iptables is available
+      ansible.builtin.command:
+        cmd: iptables --version
+      register: iptables_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display iptables version
+      ansible.builtin.debug:
+        msg: "iptables version: {{ iptables_check.stdout }}"
+      when: iptables_check.rc == 0
+
+    - name: Create test SSH log entries for fail2ban testing
+      ansible.builtin.lineinfile:
+        path: /var/log/secure
+        line: "{{ ansible_date_time.iso8601 }} {{ inventory_hostname }} sshd[1234]: Failed password for invalid user test from 192.168.1.100 port 22 ssh2"
+        create: true
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Ensure systemd is fully operational
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Wait for system to be ready
+      ansible.builtin.wait_for:
+        timeout: 5
+      delegate_to: localhost

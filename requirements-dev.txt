@@ -1,0 +1,32 @@
+# Development and testing requirements for fail2ban Ansible collection
+
+# Core Ansible
+ansible-core>=2.12,<2.16
+ansible-lint>=6.0.0
+
+# Molecule testing framework
+molecule[docker]>=5.0.0
+molecule-plugins[docker]>=23.0.0
+
+# Docker support
+docker>=6.0.0
+requests>=2.25.0
+
+# YAML linting
+yamllint>=1.26.0
+
+# Python testing
+pytest>=7.0.0
+pytest-ansible>=4.0.0
+
+# Code quality
+flake8>=5.0.0
+black>=22.0.0
+
+# Documentation
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.0.0
+
+# Utilities
+jinja2>=3.0.0
+pyyaml>=6.0.0

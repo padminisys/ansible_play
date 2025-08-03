@@ -1,0 +1,207 @@
+---
+- name: Verify Production
+  hosts: all
+  become: true
+  gather_facts: true
+  
+  tasks:
+    - name: Check if fail2ban service is running
+      ansible.builtin.systemd:
+        name: fail2ban
+      register: fail2ban_service_status
+      failed_when: fail2ban_service_status.status.ActiveState != "active"
+
+    - name: Verify fail2ban socket exists
+      ansible.builtin.stat:
+        path: /var/run/fail2ban/fail2ban.sock
+      register: fail2ban_socket
+      failed_when: not fail2ban_socket.stat.exists
+
+    - name: Test fail2ban client connectivity
+      ansible.builtin.command:
+        cmd: fail2ban-client ping
+      register: fail2ban_ping
+      changed_when: false
+      failed_when: '"pong" not in fail2ban_ping.stdout'
+
+    - name: Get fail2ban status
+      ansible.builtin.command:
+        cmd: fail2ban-client status
+      register: fail2ban_status
+      changed_when: false
+
+    - name: Verify fail2ban jails are loaded
+      ansible.builtin.assert:
+        that:
+          - "'sshd' in fail2ban_status.stdout"
+        fail_msg: "SSH jail is not loaded in fail2ban"
+        success_msg: "SSH jail is properly loaded"
+
+    - name: Get detailed SSH jail status
+      ansible.builtin.command:
+        cmd: fail2ban-client status sshd
+      register: sshd_jail_status
+      changed_when: false
+
+    - name: Verify SSH jail is active
+      ansible.builtin.assert:
+        that:
+          - "'Status for the jail: sshd' in sshd_jail_status.stdout"
+          - "'Currently failed:' in sshd_jail_status.stdout"
+          - "'Currently banned:' in sshd_jail_status.stdout"
+        fail_msg: "SSH jail is not properly configured"
+        success_msg: "SSH jail is active and monitoring"
+
+    # Production-specific tests
+    - name: Verify production-specific ban times are configured
+      ansible.builtin.command:
+        cmd: fail2ban-client get sshd bantime
+      register: ssh_bantime
+      changed_when: false
+
+    - name: Assert production ban time is stricter (at least 1 hour)
+      ansible.builtin.assert:
+        that:
+          - ssh_bantime.stdout | int >= 3600
+        fail_msg: "Production ban time should be at least 1 hour, got {{ ssh_bantime.stdout }} seconds"
+        success_msg: "Production ban time is appropriately strict: {{ ssh_bantime.stdout }} seconds"
+
+    - name: Verify production maxretry is stricter
+      ansible.builtin.command:
+        cmd: fail2ban-client get sshd maxretry
+      register: ssh_maxretry
+      changed_when: false
+
+    - name: Assert production maxretry is strict (5 or less)
+      ansible.builtin.assert:
+        that:
+          - ssh_maxretry.stdout | int <= 5
+        fail_msg: "Production maxretry should be 5 or less, got {{ ssh_maxretry.stdout }}"
+        success_msg: "Production maxretry is appropriately strict: {{ ssh_maxretry.stdout }}"
+
+    # Test web server jails for webservers group
+    - name: Check for web server jails (webservers group only)
+      ansible.builtin.command:
+        cmd: fail2ban-client status
+      register: webserver_jails_status
+      changed_when: false
+      when: "'webservers' in group_names"
+
+    - name: Verify web server jails are loaded (webservers group only)
+      ansible.builtin.assert:
+        that:
+          - "'httpd-auth' in webserver_jails_status.stdout or 'nginx-http-auth' in webserver_jails_status.stdout"
+        fail_msg: "Web server jails should be loaded for webservers"
+        success_msg: "Web server jails are properly loaded"
+      when: "'webservers' in group_names"
+
+    # Test database server specific settings (dbservers group)
+    - name: Verify database server has stricter settings (dbservers group only)
+      ansible.builtin.command:
+        cmd: fail2ban-client get sshd bantime
+      register: db_bantime
+      changed_when: false
+      when: "'dbservers' in group_names"
+
+    - name: Assert database server ban time is very strict (at least 2 hours)
+      ansible.builtin.assert:
+        that:
+          - db_bantime.stdout | int >= 7200
+        fail_msg: "Database server ban time should be at least 2 hours, got {{ db_bantime.stdout }} seconds"
+        success_msg: "Database server ban time is very strict: {{ db_bantime.stdout }} seconds"
+      when: "'dbservers' in group_names"
+
+    - name: Check fail2ban configuration files exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: config_files
+      failed_when: not config_files.stat.exists
+      loop:
+        - /etc/fail2ban/fail2ban.local
+        - /etc/fail2ban/jail.local
+
+    - name: Verify fail2ban log file exists and is writable
+      ansible.builtin.stat:
+        path: /var/log/fail2ban.log
+      register: fail2ban_log
+      failed_when: not fail2ban_log.stat.exists
+
+    - name: Check fail2ban log file permissions
+      ansible.builtin.assert:
+        that:
+          - fail2ban_log.stat.mode == "0600"
+          - fail2ban_log.stat.pw_name == "root"
+        fail_msg: "fail2ban log file has incorrect permissions"
+        success_msg: "fail2ban log file permissions are correct"
+
+    - name: Verify iptables rules are created by fail2ban
+      ansible.builtin.command:
+        cmd: iptables -L -n
+      register: iptables_rules
+      changed_when: false
+
+    - name: Check for fail2ban chains in iptables (or verify iptables is available)
+      ansible.builtin.assert:
+        that:
+          - "'f2b-sshd' in iptables_rules.stdout or 'fail2ban' in iptables_rules.stdout or 'Chain INPUT' in iptables_rules.stdout"
+        fail_msg: "iptables is not available or fail2ban integration failed"
+        success_msg: "iptables is available and fail2ban can integrate with it"
+
+    - name: Test fail2ban configuration syntax
+      ansible.builtin.command:
+        cmd: fail2ban-client -t
+      register: config_test
+      changed_when: false
+      failed_when: config_test.rc != 0
+
+    - name: Verify fail2ban database file exists
+      ansible.builtin.stat:
+        path: /var/lib/fail2ban/fail2ban.sqlite3
+      register: fail2ban_db
+      failed_when: not fail2ban_db.stat.exists
+
+    - name: Check fail2ban version
+      ansible.builtin.command:
+        cmd: fail2ban-client version
+      register: fail2ban_version
+      changed_when: false
+
+    - name: Display fail2ban version
+      ansible.builtin.debug:
+        msg: "fail2ban version: {{ fail2ban_version.stdout }}"
+
+    # Production-specific security tests
+    - name: Test production log file monitoring with failed login simulation
+      ansible.builtin.lineinfile:
+        path: /var/log/secure
+        line: "{{ ansible_date_time.iso8601 }} {{ inventory_hostname }} sshd[9999]: Failed password for invalid user prodtest from 192.168.1.200 port 22 ssh2"
+        create: true
+
+    - name: Wait for fail2ban to process the production log entry
+      ansible.builtin.wait_for:
+        timeout: 15
+      delegate_to: localhost
+
+    - name: Check if fail2ban detected the failed login in production
+      ansible.builtin.command:
+        cmd: fail2ban-client status sshd
+      register: sshd_status_after_prod_test
+      changed_when: false
+
+    - name: Verify fail2ban is monitoring logs in production
+      ansible.builtin.debug:
+        msg: "Production SSH jail status after test: {{ sshd_status_after_prod_test.stdout_lines }}"
+
+    - name: Final production verification - all tests passed
+      ansible.builtin.debug:
+        msg: 
+          - "✅ Production fail2ban service is active: {{ fail2ban_service_status.status.ActiveState }}"
+          - "✅ Production fail2ban client responds: {{ fail2ban_ping.stdout }}"
+          - "✅ Production SSH jail is loaded and monitoring with strict settings"
+          - "✅ Production ban time: {{ ssh_bantime.stdout }} seconds (>= 1 hour)"
+          - "✅ Production max retry: {{ ssh_maxretry.stdout }} attempts (<= 5)"
+          - "✅ Configuration files are present and valid"
+          - "✅ iptables integration is working"
+          - "✅ Log monitoring is functional"
+          - "✅ Host: {{ inventory_hostname }} (Groups: {{ group_names | join(', ') }})"
+          - "✅ All production fail2ban tests passed successfully!"

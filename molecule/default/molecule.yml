@@ -1,0 +1,138 @@
+---
+dependency:
+  name: galaxy
+  options:
+    requirements-file: requirements.yml
+    force: false
+
+driver:
+  name: docker
+
+platforms:
+  - name: centos-stream-10
+    image: quay.io/centos/centos:stream10-development
+    pre_build_image: true
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    command: /usr/sbin/init
+    tmpfs:
+      - /run
+      - /tmp
+    capabilities:
+      - SYS_ADMIN
+    networks:
+      - name: molecule
+    groups:
+      - centos_servers
+      - production
+
+  - name: centos-stream-10-staging
+    image: quay.io/centos/centos:stream10-development
+    pre_build_image: true
+    privileged: true
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    command: /usr/sbin/init
+    tmpfs:
+      - /run
+      - /tmp
+    capabilities:
+      - SYS_ADMIN
+    networks:
+      - name: molecule
+    groups:
+      - centos_servers
+      - staging
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      centos-stream-10:
+        fail2ban_default_bantime: 7200
+        fail2ban_default_maxretry: 3
+        fail2ban_destemail: security-test@example.com
+      centos-stream-9:
+        fail2ban_default_bantime: 3600
+        fail2ban_default_maxretry: 5
+        fail2ban_destemail: staging-test@example.com
+    group_vars:
+      all:
+        ansible_user: root
+        ansible_python_interpreter: /usr/bin/python3
+        fail2ban_loglevel: INFO
+        fail2ban_ignoreip:
+          - 127.0.0.1/8
+          - ::1
+          - 172.16.0.0/12  # Docker networks
+      production:
+        fail2ban_jails:
+          - name: sshd
+            enabled: true
+            port: ssh
+            filter: sshd
+            logpath: /var/log/secure
+            maxretry: 3
+            bantime: 7200
+            findtime: 300
+      staging:
+        fail2ban_jails:
+          - name: sshd
+            enabled: true
+            port: ssh
+            filter: sshd
+            logpath: /var/log/secure
+            maxretry: 5
+            bantime: 3600
+            findtime: 600
+  config_options:
+    defaults:
+      interpreter_python: auto_silent
+      callback_whitelist: profile_tasks, timer, yaml
+      stdout_callback: yaml
+      verbosity: 1
+    ssh_connection:
+      pipelining: false
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - cleanup
+    - destroy
+  create_sequence:
+    - dependency
+    - create
+    - prepare
+  converge_sequence:
+    - dependency
+    - create
+    - prepare
+    - converge
+  destroy_sequence:
+    - dependency
+    - cleanup
+    - destroy
+  check_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - create
+    - prepare
+    - converge
+    - check
+    - destroy

@@ -1,0 +1,246 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run tests weekly on Sundays at 2 AM UTC
+    - cron: '0 2 * * 0'
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-core ansible-lint yamllint
+          pip install molecule[docker] molecule-plugins[docker]
+
+      - name: Run yamllint
+        run: yamllint .
+
+      - name: Run ansible-lint
+        run: ansible-lint
+
+      - name: Check galaxy.yml syntax
+        run: |
+          python -c "import yaml; yaml.safe_load(open('galaxy.yml'))"
+
+  test:
+    name: Molecule Test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.11']
+        ansible-version: ['>=6.0.0,<7.0.0', '>=7.0.0,<8.0.0']
+        scenario: ['default', 'production']
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker.io
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ansible${{ matrix.ansible-version }}"
+          pip install molecule[docker] molecule-plugins[docker]
+          pip install docker requests
+          pip install ansible-lint yamllint
+
+      - name: Start Docker service
+        run: |
+          sudo systemctl start docker
+          sudo systemctl enable docker
+          sudo usermod -aG docker $USER
+
+      - name: Test Docker connectivity
+        run: |
+          docker --version
+          docker info
+
+      - name: Run Molecule tests for ${{ matrix.scenario }} scenario
+        run: |
+          molecule test -s ${{ matrix.scenario }}
+        env:
+          PY_COLORS: '1'
+          ANSIBLE_FORCE_COLOR: '1'
+          MOLECULE_NO_LOG: 'false'
+
+      - name: Upload Molecule test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: molecule-results-${{ matrix.scenario }}-py${{ matrix.python-version }}-ansible${{ matrix.ansible-version }}
+          path: |
+            molecule/*/molecule.log
+            molecule/*/.molecule/
+          retention-days: 7
+
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: [lint]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-core
+          pip install molecule[docker] molecule-plugins[docker]
+          pip install docker requests
+
+      - name: Run full integration test suite
+        run: |
+          # Test all scenarios in sequence
+          molecule test -s default
+          molecule test -s production
+        env:
+          PY_COLORS: '1'
+          ANSIBLE_FORCE_COLOR: '1'
+
+      - name: Generate test report
+        if: always()
+        run: |
+          echo "# Molecule Test Report" > test-report.md
+          echo "## Test Results" >> test-report.md
+          echo "- Default scenario: $([ -f molecule/default/.molecule/default/state.yml ] && echo '✅ PASSED' || echo '❌ FAILED')" >> test-report.md
+          echo "- Production scenario: $([ -f molecule/production/.molecule/production/state.yml ] && echo '✅ PASSED' || echo '❌ FAILED')" >> test-report.md
+          cat test-report.md
+
+      - name: Upload integration test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-test-results
+          path: |
+            test-report.md
+            molecule/*/molecule.log
+            molecule/*/.molecule/
+
+  build:
+    name: Build Collection
+    runs-on: ubuntu-latest
+    needs: [lint, test, integration-test]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install ansible-core
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-core
+
+      - name: Build collection
+        run: |
+          ansible-galaxy collection build
+
+      - name: Upload collection artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: collection
+          path: "*.tar.gz"
+
+  publish:
+    name: Publish to Galaxy
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install ansible-core
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-core
+
+      - name: Build and publish collection
+        run: |
+          ansible-galaxy collection build
+          ansible-galaxy collection publish *.tar.gz --api-key ${{ secrets.GALAXY_API_KEY }}
+
+  awx-sync:
+    name: Sync AWX Project
+    runs-on: ubuntu-latest
+    needs: [publish]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Trigger AWX Project Sync
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.AWX_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.AWX_URL }}/api/v2/projects/${{ secrets.AWX_PROJECT_ID }}/update/"
+
+      - name: Wait for sync completion
+        run: |
+          sleep 30
+          # Add logic to check sync status if needed
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Check for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD

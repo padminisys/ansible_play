@@ -1,0 +1,126 @@
+---
+# Global variables for all hosts
+# These can be overridden in group_vars/<group>.yml or host_vars/<host>.yml
+
+# Ansible connection settings
+ansible_user: ansible
+ansible_become: true
+ansible_become_method: sudo
+ansible_python_interpreter: /usr/bin/python3
+
+# fail2ban daemon configuration
+fail2ban_loglevel: INFO
+fail2ban_logtarget: /var/log/fail2ban.log
+fail2ban_syslog_target: /var/log/fail2ban.log
+fail2ban_syslog_facility: 1
+fail2ban_socket: /var/run/fail2ban/fail2ban.sock
+fail2ban_pidfile: /var/run/fail2ban/fail2ban.pid
+fail2ban_dbfile: /var/lib/fail2ban/fail2ban.sqlite3
+fail2ban_dbpurgeage: 86400  # 24 hours
+
+# Default jail configuration
+fail2ban_default_backend: systemd
+fail2ban_default_bantime: 3600    # 1 hour
+fail2ban_default_findtime: 600     # 10 minutes
+fail2ban_default_maxretry: 5
+fail2ban_default_protocol: tcp
+fail2ban_default_chain: INPUT
+fail2ban_default_port: "0:65535"
+fail2ban_default_banaction: iptables-multiport
+fail2ban_default_banaction_allports: iptables-allports
+fail2ban_default_action: "%(action_)s"
+
+# Email notification settings
+fail2ban_destemail: root@localhost
+fail2ban_sendername: "Fail2Ban"
+fail2ban_sender: fail2ban@localhost
+fail2ban_mta: sendmail
+
+# Default jails configuration
+fail2ban_jails:
+  - name: sshd
+    enabled: true
+    port: ssh
+    filter: sshd
+    logpath: /var/log/secure
+    maxretry: 5
+    bantime: 3600
+    findtime: 600
+    backend: systemd
+  - name: httpd-auth
+    enabled: false
+    port: http,https
+    filter: apache-auth
+    logpath: /var/log/httpd/error_log
+    maxretry: 6
+    bantime: 1800
+    findtime: 600
+  - name: httpd-badbots
+    enabled: false
+    port: http,https
+    filter: apache-badbots
+    logpath: /var/log/httpd/access_log
+    bantime: 86400
+    maxretry: 1
+    findtime: 86400
+  - name: nginx-http-auth
+    enabled: false
+    port: http,https
+    filter: nginx-http-auth
+    logpath: /var/log/nginx/error.log
+    maxretry: 6
+    bantime: 1800
+    findtime: 600
+  - name: postfix
+    enabled: false
+    port: smtp,465,submission
+    filter: postfix
+    logpath: /var/log/maillog
+    maxretry: 3
+    bantime: 3600
+    findtime: 600
+
+# IP addresses to ignore (whitelist)
+fail2ban_ignoreip:
+  - 127.0.0.1/8
+  - ::1
+  # Add your management networks here
+  # - 10.0.0.0/8
+  # - 192.168.0.0/16
+  # - 172.16.0.0/12
+
+# Custom filters (optional)
+fail2ban_custom_filters: []
+# Example:
+# fail2ban_custom_filters:
+#   - name: custom-app
+#     definition: |
+#       [Definition]
+#       failregex = ^<HOST> - - \[.*\] ".*" 40[0-9] .*$
+#       ignoreregex =
+
+# Custom actions (optional)
+fail2ban_custom_actions: []
+# Example:
+# fail2ban_custom_actions:
+#   - name: slack-notify
+#     definition: |
+#       [Definition]
+#       actionstart = 
+#       actionstop = 
+#       actioncheck = 
+#       actionban = curl -X POST -H 'Content-type: application/json' --data '{"text":"Banned <ip> for <failures> failures in jail <name>"}' <slack_webhook_url>
+#       actionunban = curl -X POST -H 'Content-type: application/json' --data '{"text":"Unbanned <ip> from jail <name>"}' <slack_webhook_url>
+
+# Package management
+fail2ban_packages:
+  - fail2ban
+  - fail2ban-firewalld  # Only installed if firewalld is running
+
+# Service management
+fail2ban_service_name: fail2ban
+fail2ban_service_enabled: true
+fail2ban_service_state: started
+
+# Firewall integration
+fail2ban_firewall_backend: auto  # auto, iptables, firewalld, nftables

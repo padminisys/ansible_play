@@ -1,0 +1,253 @@
+---
+- name: Install and configure fail2ban on CentOS/RHEL systems
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    # fail2ban configuration variables
+    fail2ban_loglevel: INFO
+    fail2ban_logtarget: /var/log/fail2ban.log
+    fail2ban_syslog_target: /var/log/fail2ban.log
+    fail2ban_syslog_facility: 1
+    fail2ban_socket: /var/run/fail2ban/fail2ban.sock
+    fail2ban_pidfile: /var/run/fail2ban/fail2ban.pid
+    fail2ban_dbfile: /var/lib/fail2ban/fail2ban.sqlite3
+    fail2ban_dbpurgeage: 86400
+
+    # Default jail configuration
+    fail2ban_default_backend: systemd
+    fail2ban_default_bantime: 3600
+    fail2ban_default_findtime: 600
+    fail2ban_default_maxretry: 5
+    fail2ban_default_protocol: tcp
+    fail2ban_default_chain: INPUT
+    fail2ban_default_port: 0:65535
+    fail2ban_default_banaction: iptables-multiport
+    fail2ban_default_banaction_allports: iptables-allports
+    fail2ban_default_action: "%(action_)s"
+
+    # Email notification settings (optional)
+    fail2ban_destemail: root@localhost
+    fail2ban_sendername: "Fail2Ban"
+    fail2ban_sender: fail2ban@localhost
+    fail2ban_mta: sendmail
+
+    # Jails configuration
+    fail2ban_jails:
+      - name: sshd
+        enabled: true
+        port: ssh
+        filter: sshd
+        logpath: /var/log/secure
+        maxretry: 3
+        bantime: 3600
+        findtime: 600
+      - name: httpd-auth
+        enabled: false
+        port: http,https
+        filter: apache-auth
+        logpath: /var/log/httpd/error_log
+        maxretry: 6
+        bantime: 600
+      - name: httpd-badbots
+        enabled: false
+        port: http,https
+        filter: apache-badbots
+        logpath: /var/log/httpd/access_log
+        bantime: 86400
+        maxretry: 1
+
+  pre_tasks:
+    - name: Validate OS compatibility
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == "RedHat"
+          - ansible_distribution_major_version|int >= 8
+        fail_msg: "This playbook is designed for CentOS/RHEL 8+ systems"
+        success_msg: "OS compatibility validated"
+      tags:
+        - validation
+        - fail2ban
+
+  tasks:
+    - name: Install EPEL repository
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+      tags:
+        - packages
+        - fail2ban
+        - epel
+
+    - name: Install fail2ban package
+      ansible.builtin.dnf:
+        name: fail2ban
+        state: present
+      notify:
+        - restart fail2ban
+      tags:
+        - packages
+        - fail2ban
+
+    - name: Install fail2ban-firewalld (if firewalld is active)
+      ansible.builtin.dnf:
+        name: fail2ban-firewalld
+        state: present
+      when: ansible_facts['services']['firewalld.service']['state'] == 'running'
+      notify:
+        - restart fail2ban
+      tags:
+        - packages
+        - fail2ban
+        - firewalld
+
+    - name: Create fail2ban configuration directory
+      ansible.builtin.file:
+        path: /etc/fail2ban
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags:
+        - config
+        - fail2ban
+
+    - name: Create fail2ban local configuration file
+      ansible.builtin.template:
+        src: fail2ban.local.j2
+        dest: /etc/fail2ban/fail2ban.local
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      notify:
+        - restart fail2ban
+      tags:
+        - config
+        - fail2ban
+
+    - name: Create jail.local configuration file
+      ansible.builtin.template:
+        src: jail.local.j2
+        dest: /etc/fail2ban/jail.local
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      notify:
+        - restart fail2ban
+      tags:
+        - config
+        - fail2ban
+
+    - name: Create fail2ban log directory
+      ansible.builtin.file:
+        path: /var/log/fail2ban
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags:
+        - config
+        - fail2ban
+
+    - name: Configure logrotate for fail2ban
+      ansible.builtin.copy:
+        content: |
+          /var/log/fail2ban.log {
+              weekly
+              rotate 4
+              missingok
+              notifempty
+              compress
+              delaycompress
+              postrotate
+                  /bin/systemctl reload fail2ban > /dev/null 2>&1 || true
+              endscript
+          }
+        dest: /etc/logrotate.d/fail2ban
+        owner: root
+        group: root
+        mode: '0644'
+      tags:
+        - config
+        - fail2ban
+        - logrotate
+
+    - name: Start and enable fail2ban service
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: started
+        enabled: true
+      tags:
+        - service
+        - fail2ban
+
+    - name: Wait for fail2ban to be fully started
+      ansible.builtin.wait_for:
+        path: "{{ fail2ban_socket }}"
+        timeout: 30
+      tags:
+        - service
+        - fail2ban
+
+  post_tasks:
+    - name: Verify fail2ban service status
+      ansible.builtin.systemd:
+        name: fail2ban
+      register: fail2ban_service_status
+      tags:
+        - validation
+        - fail2ban
+
+    - name: Display fail2ban service status
+      ansible.builtin.debug:
+        msg: "fail2ban service is {{ fail2ban_service_status.status.ActiveState }}"
+      tags:
+        - validation
+        - fail2ban
+
+    - name: Check fail2ban client status
+      ansible.builtin.command:
+        cmd: fail2ban-client status
+      register: fail2ban_client_status
+      changed_when: false
+      tags:
+        - validation
+        - fail2ban
+
+    - name: Display fail2ban jails status
+      ansible.builtin.debug:
+        var: fail2ban_client_status.stdout_lines
+      tags:
+        - validation
+        - fail2ban
+
+    - name: Check active jails
+      ansible.builtin.command:
+        cmd: "fail2ban-client status {{ item.name }}"
+      register: jail_status
+      changed_when: false
+      loop: "{{ fail2ban_jails }}"
+      when: item.enabled | default(false)
+      tags:
+        - validation
+        - fail2ban
+
+    - name: Display individual jail status
+      ansible.builtin.debug:
+        msg: "{{ item.stdout_lines }}"
+      loop: "{{ jail_status.results }}"
+      when: item.stdout_lines is defined
+      tags:
+        - validation
+        - fail2ban
+
+  handlers:
+    - name: Restart fail2ban
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted
+      tags:
+        - handlers
+        - fail2ban

@@ -1,0 +1,78 @@
+---
+# .ansible-lint configuration file
+# See https://ansible-lint.readthedocs.io/en/latest/configuring.html
+
+# Exclude paths from linting
+exclude_paths:
+  - .cache/
+  - .github/
+  - molecule/
+  - tests/output/
+  - '*.tar.gz'
+
+# Enable offline mode to avoid downloading roles
+offline: false
+
+# Use default rules
+use_default_rules: true
+
+# Skip specific rules (if needed)
+skip_list: []
+  # Skip rules that might be too strict for this collection
+  # - yaml[line-length]  # Allow longer lines in some cases
+  # - name[casing]       # Allow flexible naming
+
+# Enable specific rules
+enable_list:
+  - yaml[comments]
+  - yaml[comments-indentation]
+  - yaml[document-start]
+  - yaml[empty-lines]
+  - yaml[indentation]
+  - yaml[key-duplicates]
+  - yaml[line-length]
+  - yaml[new-line-at-end-of-file]
+  - yaml[trailing-spaces]
+  - yaml[truthy]
+
+# Warn instead of error for certain rules
+warn_list:
+  - yaml[line-length]
+  - name[template]
+  - risky-file-permissions
+
+# Set the kinds of files to lint
+kinds:
+  - yaml: "**/*.{yaml,yml}"
+  - playbook: "**/playbooks/*.{yml,yaml}"
+  - tasks: "**/tasks/*.{yml,yaml}"
+  - vars: "**/vars/*.{yml,yaml}"
+  - meta: "**/meta/main.{yml,yaml}"
+  - requirements: "**/requirements.{yml,yaml}"
+  - handlers: "**/handlers/*.{yml,yaml}"
+  - inventory: "**/inventory/*.{yml,yaml}"
+  - group_vars: "**/group_vars/*.{yml,yaml}"
+  - host_vars: "**/host_vars/*.{yml,yaml}"
+
+# Mock modules and roles for linting
+mock_modules:
+  - community.general.fail2ban
+
+mock_roles:
+  - security.fail2ban
+
+# Specify which version of Ansible to target
+supported_ansible_also:
+  - "2.12"
+  - "2.13"
+  - "2.14"
+  - "2.15"
+
+# Profile to use (can be min, basic, moderate, safety, shared, production)
+profile: production
+
+# Write output to file
+# output_file: ansible-lint-results.txt
+
+# Set verbosity level
+verbosity: 1
