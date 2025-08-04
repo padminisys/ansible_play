@@ -61,11 +61,12 @@ fail2ban_jails:
     bantime: 3600
     findtime: 600
 
-# IP Whitelist
+# IP Whitelist (Important: Add your management networks)
 fail2ban_ignoreip:
   - 127.0.0.1/8
   - ::1
-  - 10.0.0.0/24  # Your management network
+  - 10.0.0.0/24    # Your management network
+  - 192.168.1.0/24 # Example: Office network
 ```
 
 ### Environment-Specific Settings
@@ -140,7 +141,7 @@ sudo fail2ban-client status
 sudo fail2ban-client status sshd
 
 # View banned IPs
-sudo fail2ban-client get sshd banip
+sudo fail2ban-client status sshd
 
 # Check logs
 sudo tail -f /var/log/fail2ban.log

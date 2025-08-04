@@ -244,7 +244,7 @@
         - fail2ban
 
   handlers:
-    - name: Restart fail2ban
+    - name: restart fail2ban
       ansible.builtin.systemd:
         name: fail2ban
         state: restarted
