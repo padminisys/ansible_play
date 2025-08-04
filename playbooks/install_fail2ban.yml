@@ -84,7 +84,7 @@
         name: fail2ban
         state: present
       notify:
-        - restart fail2ban
+        - Restart fail2ban
       tags:
         - packages
         - fail2ban
@@ -105,7 +105,7 @@
         - "'firewalld.service' in ansible_facts.services"
         - ansible_facts.services['firewalld.service'].state == 'running'
       notify:
-        - restart fail2ban
+        - Restart fail2ban
       tags:
         - packages
         - fail2ban
@@ -124,28 +124,28 @@
 
     - name: Create fail2ban local configuration file
       ansible.builtin.template:
-        src: fail2ban.local.j2
+        src: ../templates/fail2ban.local.j2
         dest: /etc/fail2ban/fail2ban.local
         owner: root
         group: root
         mode: '0644'
         backup: true
       notify:
-        - restart fail2ban
+        - Restart fail2ban
       tags:
         - config
         - fail2ban
 
     - name: Create jail.local configuration file
       ansible.builtin.template:
-        src: jail.local.j2
+        src: ../templates/jail.local.j2
         dest: /etc/fail2ban/jail.local
         owner: root
         group: root
         mode: '0644'
         backup: true
       notify:
-        - restart fail2ban
+        - Restart fail2ban
       tags:
         - config
         - fail2ban
@@ -254,7 +254,7 @@
         - fail2ban
 
   handlers:
-    - name: restart fail2ban
+    - name: Restart fail2ban
       ansible.builtin.systemd:
         name: fail2ban
         state: restarted
